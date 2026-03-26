@@ -1,6 +1,6 @@
 `default_nettype none
 
-module tt_um_stopwatch #(
+module tt_um_advaittej_stopwatch #(
     parameter CLOCKS_PER_SECOND = 24'd9_999_999
 )(
     // DO NOT CHANGE THESE NAMES!!
