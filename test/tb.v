@@ -27,25 +27,29 @@ module tb ();
   wire VGND = 1'b0;
 `endif
 
-  // Instantiate OUR module with the simulation speed-up parameter
-  tt_um_advaittej_stopwatch #(
-      .CLOCKS_PER_SECOND(24'd9) // 10 clocks = 1 second for fast testing
-  ) user_project (
-
-      // Include power ports for the Gate Level test:
+// Instantiate OUR module. Hide the parameter during Gate Level tests.
+    tt_um_advaittej_stopwatch 
+`ifndef GL_TEST
+    #(
+        .CLOCKS_PER_SECOND(24'd9) // 10 clocks = 1 second for fast testing
+    )
+`endif
+    user_project (
+        
+        // Include power ports for the Gate Level test:
 `ifdef GL_TEST
-      .VPWR(VPWR),
-      .VGND(VGND),
+        .VPWR(VPWR),
+        .VGND(VGND),
 `endif
 
-      .ui_in  (ui_in),    // Dedicated inputs
-      .uo_out (uo_out),   // Dedicated outputs
-      .uio_in (uio_in),   // IOs: Input path
-      .uio_out(uio_out),  // IOs: Output path
-      .uio_oe (uio_oe),   // IOs: Enable path (active high: 0=input, 1=output)
-      .ena    (ena),      // enable - goes high when design is selected
-      .clk    (clk),      // clock
-      .rst_n  (rst_n)     // not reset
-  );
+        .ui_in  (ui_in),    // Dedicated inputs
+        .uo_out (uo_out),   // Dedicated outputs
+        .uio_in (uio_in),   // IOs: Input path
+        .uio_out(uio_out),  // IOs: Output path
+        .uio_oe (uio_oe),   // IOs: Enable path (active high: 0=input, 1=output)
+        .ena    (ena),      // enable - goes high when design is selected
+        .clk    (clk),      // clock
+        .rst_n  (rst_n)     // not reset
+    );
 
 endmodule
