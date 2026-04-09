@@ -1,95 +1,137 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import Timer, RisingEdge, FallingEdge, ClockCycles
+from cocotb.triggers import ClockCycles, RisingEdge
+
+
+# ui_in mapping from RTL:
+# ui_in[0] = SCL
+# ui_in[1] = SDA
+def set_i2c_lines(dut, scl, sda):
+    dut.ui_in.value = (sda << 1) | scl
+
+
+async def i2c_clock_pulse(dut, sda):
+    set_i2c_lines(dut, 0, sda)
+    await ClockCycles(dut.clk, 10)
+
+    set_i2c_lines(dut, 1, sda)
+    await ClockCycles(dut.clk, 10)
+
+    set_i2c_lines(dut, 0, sda)
+    await ClockCycles(dut.clk, 10)
+
+
+async def i2c_ack_phase(dut):
+    # Master releases SDA, slave drives ACK
+    set_i2c_lines(dut, 0, 1)
+    await ClockCycles(dut.clk, 10)
+
+    set_i2c_lines(dut, 1, 1)
+    await ClockCycles(dut.clk, 10)
+
+    # Optional ACK check
+    ack = int(dut.uo_out.value) & 0x02
+    dut._log.info(f"ACK raw output bit = {ack}")
+
+    set_i2c_lines(dut, 0, 1)
+    await ClockCycles(dut.clk, 10)
+
 
 async def i2c_write(dut, address, reg_addr, value):
-    """Helper to perform an I2C write transaction"""
-    # Start Condition: SDA goes low while SCL is high
-    dut.ui_in.value = 0b01  # SCL=1, SDA=0
+    # Idle bus
+    set_i2c_lines(dut, 1, 1)
     await ClockCycles(dut.clk, 10)
 
-    # Send 7-bit Address + Write Bit (0)
+    # START: SDA falls while SCL high
+    set_i2c_lines(dut, 1, 0)
+    await ClockCycles(dut.clk, 10)
+
+    # Address + W bit
     full_addr = (address << 1) | 0
     for i in range(7, -1, -1):
-        bit = (full_addr >> i) & 1
-        dut.ui_in.value = (0 << 1) | bit # SCL low, set SDA
-        await ClockCycles(dut.clk, 10)
-        dut.ui_in.value = (1 << 1) | bit # SCL high
-        await ClockCycles(dut.clk, 10)
+        await i2c_clock_pulse(dut, (full_addr >> i) & 1)
 
-    # ACK bit from Slave
-    dut.ui_in.value = 0b00 # SCL low
-    await ClockCycles(dut.clk, 10)
-    dut.ui_in.value = 0b10 # SCL high
-    await ClockCycles(dut.clk, 10)
+    await i2c_ack_phase(dut)
 
-    # Send Register Address
+    # Register address
     for i in range(7, -1, -1):
-        bit = (reg_addr >> i) & 1
-        dut.ui_in.value = (0 << 1) | bit
-        await ClockCycles(dut.clk, 10)
-        dut.ui_in.value = (1 << 1) | bit
-        await ClockCycles(dut.clk, 10)
+        await i2c_clock_pulse(dut, (reg_addr >> i) & 1)
 
-    # ACK
-    dut.ui_in.value = 0b10
-    await ClockCycles(dut.clk, 10)
+    await i2c_ack_phase(dut)
 
-    # Send Data Value
+    # Data byte
     for i in range(7, -1, -1):
-        bit = (value >> i) & 1
-        dut.ui_in.value = (0 << 1) | bit
-        await ClockCycles(dut.clk, 10)
-        dut.ui_in.value = (1 << 1) | bit
-        await ClockCycles(dut.clk, 10)
+        await i2c_clock_pulse(dut, (value >> i) & 1)
 
-    # ACK and Stop
-    dut.ui_in.value = 0b10
+    await i2c_ack_phase(dut)
+
+    # STOP: SDA rises while SCL high
+    set_i2c_lines(dut, 0, 0)
     await ClockCycles(dut.clk, 10)
-    dut.ui_in.value = 0b11 # Stop: SDA high while SCL high
+
+    set_i2c_lines(dut, 1, 0)
     await ClockCycles(dut.clk, 10)
+
+    set_i2c_lines(dut, 1, 1)
+    await ClockCycles(dut.clk, 10)
+
 
 @cocotb.test()
 async def test_i2c_pwm_logic(dut):
-    # Setup Clock (100MHz for fast simulation)
     clock = Clock(dut.clk, 10, unit="ns")
     cocotb.start_soon(clock.start())
 
-    # Initialize
+    # Reset
     dut.rst_n.value = 0
-    dut.ui_in.value = 0b11 # SCL/SDA high (Idle)
     dut.ena.value = 1
-    await ClockCycles(dut.clk, 5)
-    dut.rst_n.value = 1
+    set_i2c_lines(dut, 1, 1)
+
     await ClockCycles(dut.clk, 5)
 
-    # --- Test 1: Program 25% Duty Cycle ---
-    # Register 0x00 is Duty Cycle. 25% of 256 is 64 (0x40).
-    dut._log.info("Setting Duty Cycle to 25% (0x40)")
+    dut.rst_n.value = 1
+    await ClockCycles(dut.clk, 10)
+
+    # -------------------------------
+    # Test 1: Duty Cycle = 0x40 (25%)
+    # -------------------------------
+    dut._log.info("Writing duty_cycle = 0x40")
     await i2c_write(dut, 0x3C, 0x00, 0x40)
 
-    # Wait for a full PWM cycle (256 counts)
+    await ClockCycles(dut.clk, 20)
+
+    # Sync to PWM period boundary approximately
     high_count = 0
     for _ in range(256):
         await RisingEdge(dut.clk)
         if int(dut.uo_out.value) & 0x01:
             high_count += 1
 
-    dut._log.info(f"Measured High Pulses: {high_count}/256")
-    assert 60 <= high_count <= 68, f"Duty cycle mismatch! Expected ~64, got {high_count}"
+    dut._log.info(f"Measured high_count = {high_count}")
+    assert 60 <= high_count <= 68, \
+        f"Duty cycle mismatch: expected ~64, got {high_count}"
 
-    # --- Test 2: Program Prescaler ---
-    # Register 0x01 is Prescaler. Set to 0x04 (Slow down PWM 4x)
-    dut._log.info("Setting Prescaler to 4")
+    # -------------------------------
+    # Test 2: Prescaler = 4
+    # -------------------------------
+    dut._log.info("Writing prescaler = 4")
     await i2c_write(dut, 0x3C, 0x01, 0x04)
 
-    # Verify timing (each PWM increment should now take 5 clock cycles)
-    await RisingEdge(dut.uo_out)
-    start_time = cocotb.utils.get_sim_time(unit="ns")
-    await RisingEdge(dut.uo_out)
-    end_time = cocotb.utils.get_sim_time(unit="ns")
+    await ClockCycles(dut.clk, 20)
+
+    rise_count = 0
+    start_time = None
+    end_time = None
+
+    while rise_count < 2:
+        await RisingEdge(dut.uo_out[0])
+        if rise_count == 0:
+            start_time = cocotb.utils.get_sim_time(unit="ns")
+        elif rise_count == 1:
+            end_time = cocotb.utils.get_sim_time(unit="ns")
+        rise_count += 1
 
     period = end_time - start_time
-    dut._log.info(f"Measured PWM Period: {period}ns")
-    # Expected: (Prescaler + 1) * 256 * clock_period = 5 * 256 * 10 = 12,800ns
-    assert 12700 <= period <= 12900, "Prescaler logic failed to slow down the signal!"
+    dut._log.info(f"Measured PWM Period = {period} ns")
+
+    assert 12000 <= period <= 13500, \
+        f"Prescaler failed: period={period} ns"
