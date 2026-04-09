@@ -53,68 +53,80 @@ module tt_um_i2c_pwm #(
    // States
    localparam IDLE = 0, ADDR = 1, GET_REG = 2, WRITE_VAL = 3, ACK = 4;
 
-   // TODO: need to fix fsm
-
    always @(posedge clk or negedge rst_n) begin
       if (!rst_n) begin
-         state <= IDLE;
+         state      <= IDLE;
          duty_cycle <= 8'h80;
-         prescaler <= 8'h00;
-         sda_out <= 1'b1;
-      end else if (start_bit) begin
-         state <= IDLE;
+         prescaler  <= 8'h00;
+         sda_out    <= 1'b1;
+         bit_count  <= 0;
+         shift_reg  <= 0;
       end else begin
+
+         // Default: release SDA unless ACKing
+         sda_out <= 1'b1;
+
+         // Shift in bits on SCL rising edge
          if (scl_rise && state != ACK) begin
-            shift_reg <= {shift_reg[6:0], sda_sync[1]};
-            bit_count <= bit_count + 1;
+            shift_reg  <= {shift_reg[6:0], sda_sync[1]};
+            bit_count  <= bit_count + 1;
          end
 
          case (state)
+
            IDLE: begin
               if (start_bit) begin
-                 state <= ADDR;
+                 state     <= ADDR;
                  bit_count <= 0;
               end
            end
+
            ADDR: begin
               if (bit_count == 8) begin
                  bit_count <= 0;
-                 if (shift_reg[7:1] == 7'h3c && shift_reg[0] == 0) begin
+                 if (shift_reg[7:1] == 7'h3C && shift_reg[0] == 0) begin
                     next_state <= GET_REG;
                     state <= ACK;
                  end else begin
                     state <= IDLE;
                  end
               end
-           end // case: ADDR
-           GET_REG: begin // gets the Internal Register address
+           end
+
+           GET_REG: begin
               if (bit_count == 8) begin
-                 reg_addr <= shift_reg;
-                 bit_count <= 8;
+                 reg_addr   <= shift_reg;
+                 bit_count  <= 0;
                  next_state <= WRITE_VAL;
-                 state <= ACK;
+                 state      <= ACK;
               end
            end
-           WRITE_VAL: begin // stores data into duty_cycle or prescaler depending on reg_addr
+
+           WRITE_VAL: begin
               if (bit_count == 8) begin
-                 if (reg_addr == 8'h00) duty_cycle <= shift_reg;
-                 else if (reg_addr == 8'h01) prescaler <= shift_reg;
-                 bit_count <= 0;
+                 if (reg_addr == 8'h00)
+                   duty_cycle <= shift_reg;
+                 else if (reg_addr == 8'h01)
+                   prescaler <= shift_reg;
+
+                 bit_count  <= 0;
                  next_state <= IDLE;
-                 state <= ACK;
+                 state      <= ACK;
               end
            end
+
            ACK: begin
-              // Pull SDA low to show acknowledgement that data is received
               sda_out <= 1'b0;
-              if (scl_rise) begin
+
+              if (scl_fall) begin
                  sda_out <= 1'b1;
-                 state <= next_state;
+                 state   <= next_state;
               end
            end
-         endcase // case (state)
-      end // else: !if(start_bit)
-   end // always @ (posedge clk or negedge rst_n)
+
+         endcase
+      end
+   end
 
    // PWM Engine with Prescalar
    reg [7:0] p_cnt;
