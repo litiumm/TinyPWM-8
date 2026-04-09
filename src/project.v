@@ -33,11 +33,15 @@ module tt_um_i2c_pwm #(
       sda_sync <= {sda_sync[0], sda_in}; // sda_sync = [previous sda_in, current sda_in]
    end
 
+   wire scl_rise = (scl_sync == 2'b01);
+   wire scl_high = scl_sync[1];
+
    // Start/Stop detection
    // start_bit = when sda_i falls high to low (1 to 0) while scl_sync(scl) is high
-   wire start_bit = (scl_sync[1] && !sda_sync[0] && sda_sync[1]);
+   wire start_bit = (scl_high && !sda_sync[0] && sda_sync[1]);
+   wire stop_bit = (scl_high && sda_sync[0] && !sda_sync[1]);
 
-   reg [2:0] state; // state variable
+   reg [2:0] state, next_state; // state variable
    reg [3:0] bit_count; // bit count - how many bits have been received so far
    reg [7:0] shift_reg; // shift register - stores the data by shifting the bits as more are received to form a full byte
    reg [7:0] reg_addr; // states which Internal register the master want to access: duty_cycle or prescaler
@@ -58,17 +62,36 @@ module tt_um_i2c_pwm #(
          prescaler <= 8'h00;
          sda_out <= 1'b1;
       end else if (start_bit) begin
-         state <= ADDR;
-         bit_count <= 0;
+         state <= IDLE;
       end else begin
+         if (scl_rise && state != ACK) begin
+            shift_reg <= {shift_reg[6:0], sda_sync[1]};
+            bit_count <= bit_count + 1;
+         end
+
          case (state)
-           ADDR: begin
-              // Logical Error
-              if (bit_count == 8) state <= (shift_reg[7:1] == 7'h3C) ? GET_REG : IDLE;
+           IDLE: begin
+              if (start_bit) begin
+                 state <= ADDR;
+                 bit_count <= 0;
+              end
            end
+           ADDR: begin
+              if (bit_count == 8) begin
+                 bit_count <= 0;
+                 if (shift_reg[7:1] == 7'h3c && shift_reg[0] == 0) begin
+                    next_state <= GET_REG;
+                    state <= ACK;
+                 end else begin
+                    state <= IDLE;
+                 end
+              end
+           end // case: ADDR
            GET_REG: begin // gets the Internal Register address
               if (bit_count == 8) begin
                  reg_addr <= shift_reg;
+                 bit_count <= 8;
+                 next_state <= WRITE_VAL;
                  state <= ACK;
               end
            end
@@ -76,13 +99,18 @@ module tt_um_i2c_pwm #(
               if (bit_count == 8) begin
                  if (reg_addr == 8'h00) duty_cycle <= shift_reg;
                  else if (reg_addr == 8'h01) prescaler <= shift_reg;
+                 bit_count <= 0;
+                 next_state <= IDLE;
                  state <= ACK;
               end
            end
            ACK: begin
-              // Logical Error
+              // Pull SDA low to show acknowledgement that data is received
               sda_out <= 1'b0;
-              state <= (state == GET_REG) ? WRITE_VAL : IDLE;
+              if (scl_rise) begin
+                 sda_out <= 1'b1;
+                 state <= next_state;
+              end
            end
          endcase // case (state)
       end // else: !if(start_bit)
@@ -107,4 +135,5 @@ module tt_um_i2c_pwm #(
    end // always @ (posedge clk or negedge rst_n)
 
    assign uo_out[0] = (pwm_cnt < duty_cycle);
+
 endmodule
