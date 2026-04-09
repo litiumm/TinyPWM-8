@@ -35,7 +35,7 @@ module tt_um_i2c_pwm #(
 
    wire scl_rise = (scl_sync == 2'b01);
    wire scl_high = scl_sync[1];
-
+   wire scl_fall = (!scl_sync[0] && scl_sync[1]);
    // Start/Stop detection
    // start_bit = when sda_i falls high to low (1 to 0) while scl_sync(scl) is high
    wire start_bit = (scl_high && !sda_sync[0] && sda_sync[1]);
